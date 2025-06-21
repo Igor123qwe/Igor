@@ -3,7 +3,6 @@ import WebApp from '@twa-dev/sdk';
 import './App.css';
 import { Pie } from 'react-chartjs-2';
 
-// Chart.js registration (обязательно для pie chart)
 import {
   Chart as ChartJS,
   ArcElement,
@@ -19,12 +18,20 @@ function getToday() {
   return new Date().toISOString().split('T')[0];
 }
 
-function loadTransactions() {
-  return JSON.parse(localStorage.getItem('transactions') || '[]');
-}
+const categories = ['Еда', 'Транспорт', 'Квартира', 'Здоровье', 'Одежда', 'Другое'];
 
-function saveTransactions(transactions) {
-  localStorage.setItem('transactions', JSON.stringify(transactions));
+// --- Функция загрузки данных из Google Sheets ---
+async function fetchGoogleSheetData() {
+  const SPREADSHEET_ID = '1lZbSlYvCyHmR45Ducd2R5w_gwOaKnJePOW4RKaiGx2E';
+  const SHEET = 'Траты';
+  const url = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${SHEET}`;
+  const response = await fetch(url);
+  const text = await response.text();
+  const json = JSON.parse(text.substr(47).slice(0, -2));
+  // rows[0] - заголовки
+  return json.table.rows
+    .map(row => row.c.map(cell => (cell ? cell.v : '')))
+    .filter(r => r.length >= 5); // дата, сумма, категория, описание, id
 }
 
 function groupByDay(transactions) {
@@ -35,50 +42,55 @@ function groupByDay(transactions) {
   return map;
 }
 
-const categories = ['Еда', 'Транспорт', 'Квартира', 'Здоровье', 'Одежда', 'Другое'];
-
 function App() {
-  const [amount, setAmount] = useState('');
-  const [category, setCategory] = useState(categories[0]);
-  const [note, setNote] = useState('');
-  const [date, setDate] = useState(getToday());
-  const [transactions, setTransactions] = useState(loadTransactions());
+  const [transactions, setTransactions] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [day, setDay] = useState(getToday());
 
-  // Telegram mini app ready!
   useEffect(() => {
     try {
       WebApp.ready();
-      WebApp.MainButton.setParams({
-        text: 'Добавить',
-        is_visible: true,
-        is_active: true,
-      });
-      WebApp.MainButton.onClick(() => {
-        handleAddTx();
-      });
-    } catch (e) {
-      // не в Telegram
-    }
-    // eslint-disable-next-line
-  }, [amount, category, note, date]);
+    } catch (e) {}
+  }, []);
 
+  // Загружаем данные из Google Sheets
   useEffect(() => {
-    saveTransactions(transactions);
-  }, [transactions]);
+    async function loadData() {
+      setLoading(true);
+      try {
+        const rows = await fetchGoogleSheetData();
+        // [Дата, Сумма, Категория, Описание, Telegram User ID]
+        const txs = rows.slice(1).map(r => ({
+          date: r[0]?.slice(0, 10) || '', // только YYYY-MM-DD
+          amount: r[1],
+          category: r[2],
+          note: r[3],
+          telegramUserId: r[4],
+        }));
+        setTransactions(txs);
+        // выставить день на сегодня, если есть такие транзакции, иначе на последний найденный
+        const dates = txs.map(t => t.date).filter(Boolean);
+        setDay(dates.includes(getToday()) ? getToday() : (dates[dates.length - 1] || getToday()));
+      } catch (e) {
+        alert('Ошибка загрузки данных Google Sheets');
+      }
+      setLoading(false);
+    }
+    loadData();
+  }, []);
 
+  // Группировка по дням
   const daysMap = groupByDay(transactions);
   const days = Object.keys(daysMap).sort().reverse();
-
   const dailyTx = daysMap[day] || [];
 
-  // Статистика по категориям
+  // Готовим данные для диаграммы
   const chartData = {
     labels: categories,
     datasets: [
       {
         data: categories.map(cat =>
-          dailyTx.filter(tx => tx.category === cat).reduce((sum, tx) => sum + +tx.amount, 0)
+          dailyTx.filter(tx => tx.category.toLowerCase() === cat.toLowerCase()).reduce((sum, tx) => sum + +tx.amount, 0)
         ),
         backgroundColor: [
           '#4682B4', '#FFA07A', '#7FFFD4', '#F4A460', '#8A2BE2', '#C0C0C0'
@@ -87,49 +99,9 @@ function App() {
     ],
   };
 
-  function handleAddTx(e) {
-    if (e) e.preventDefault();
-    if (!amount || isNaN(amount)) return;
-    const tx = { amount, category, note, date };
-    setTransactions([...transactions, tx]);
-    setAmount('');
-    setNote('');
-  }
-
-  // Если приложение не в Telegram, просто показываем обычную кнопку
-  const isTelegram = window?.Telegram?.WebApp !== undefined || !!window.twa;
-
   return (
     <div className="App">
       <h2>Финансы в Telegram</h2>
-
-      <form onSubmit={handleAddTx} className="form">
-        <input
-          type="number"
-          placeholder="Сумма"
-          value={amount}
-          onChange={e => setAmount(e.target.value)}
-          required
-        />
-        <select value={category} onChange={e => setCategory(e.target.value)}>
-          {categories.map(cat => <option key={cat}>{cat}</option>)}
-        </select>
-        <input
-          type="text"
-          placeholder="Комментарий"
-          value={note}
-          onChange={e => setNote(e.target.value)}
-        />
-        <input
-          type="date"
-          value={date}
-          onChange={e => setDate(e.target.value)}
-          max={getToday()}
-        />
-        {!isTelegram && (
-          <button type="submit">Добавить</button>
-        )}
-      </form>
 
       <div className="days-scroll">
         {days.map(d => (
@@ -144,7 +116,7 @@ function App() {
       </div>
 
       <h4>Диаграмма за {day}</h4>
-      <Pie data={chartData} />
+      {loading ? <div>Загрузка...</div> : <Pie data={chartData} />}
 
       <h4>Траты за {day}</h4>
       <ul className="tx-list">
