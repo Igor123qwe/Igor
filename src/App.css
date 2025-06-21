@@ -1,0 +1,58 @@
+.App {
+  max-width: 450px;
+  margin: 32px auto;
+  background: #fff;
+  padding: 24px;
+  border-radius: 24px;
+  box-shadow: 0 4px 32px #0001;
+  font-family: Inter, Arial, sans-serif;
+}
+h2 {
+  text-align: center;
+  font-size: 2rem;
+}
+.form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.form input, .form select, .form button {
+  flex: 1 1 180px;
+  font-size: 1.1rem;
+  padding: 10px 12px;
+  border: 1px solid #c0c7cf;
+  border-radius: 8px;
+}
+.form button, .days-scroll button.active {
+  background: #4682B4;
+  color: #fff;
+  font-weight: bold;
+  border: none;
+}
+.days-scroll {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 16px;
+  overflow-x: auto;
+}
+.days-scroll button {
+  border: none;
+  border-radius: 8px;
+  background: #dbeafe;
+  color: #1e293b;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+.days-scroll button.active {
+  background: #4682B4;
+  color: #fff;
+}
+.tx-list {
+  padding: 0;
+  list-style: none;
+}
+.tx-list li {
+  border-bottom: 1px solid #f3f4f6;
+  padding: 4px 0;
+}
