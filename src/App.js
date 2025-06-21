@@ -34,6 +34,11 @@ async function fetchGoogleSheetData() {
     .filter(r => r.length >= 5); // дата, сумма, категория, описание, id
 }
 
+function onlyDate(val) {
+  // Берём только "2025-06-21"
+  return (val || '').slice(0, 10);
+}
+
 function groupByDay(transactions) {
   const map = {};
   transactions.forEach(tx => {
@@ -61,7 +66,7 @@ function App() {
         const rows = await fetchGoogleSheetData();
         // [Дата, Сумма, Категория, Описание, Telegram User ID]
         const txs = rows.slice(1).map(r => ({
-          date: r[0]?.slice(0, 10) || '', // только YYYY-MM-DD
+          date: onlyDate(r[0]),
           amount: r[1],
           category: r[2],
           note: r[3],
