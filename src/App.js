@@ -20,31 +20,43 @@ function getToday() {
 
 const SPREADSHEET_ID = '1lZbSlYvCyHmR45Ducd2R5w_gwOaKnJePOW4RKaiGx2E';
 
-async function fetchGoogleSheetData() {
-  const SHEET = 'Траты';
-  const url = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${SHEET}`;
-  const response = await fetch(url);
-  const text = await response.text();
-  const json = JSON.parse(text.substr(47).slice(0, -2));
-  return json.table.rows
-    .map(row => row.c.map(cell => (cell ? cell.v : '')))
-    .filter(r => r.length >= 3); // дата, сумма, категория минимум
+function parseCellDate(cell) {
+  // Google Sheets API может отдавать даты как объект: {v: "Date(2025,5,23,16,14,34)", f: "23.06.2025 16:14:34"}
+  if (!cell) return '';
+  if (typeof cell === 'string') return cell.slice(0, 10);
+  if (typeof cell === 'object' && cell.f) return cell.f.split(' ')[0].split('.').reverse().join('-'); // dd.mm.yyyy -> yyyy-mm-dd
+  if (typeof cell === 'object' && cell.v && typeof cell.v === 'string' && cell.v.startsWith('Date(')) {
+    // Парсим Date(2025,5,23,16,14,34)
+    const arr = cell.v.match(/\d+/g);
+    if (!arr) return '';
+    const year = arr[0], month = String(Number(arr[1]) + 1).padStart(2, '0'), day = String(arr[2]).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  }
+  return '';
 }
 
+// Категории из листа "Категории"
 async function fetchCategories() {
   const SHEET = 'Категории';
   const url = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${SHEET}`;
   const response = await fetch(url);
   const text = await response.text();
   const json = JSON.parse(text.substr(47).slice(0, -2));
-  // Берём только значения из первой колонки, начиная со 2 строки
   return json.table.rows.slice(1)
     .map(row => (row.c[0] && typeof row.c[0].v === 'string' ? row.c[0].v.trim() : ''))
     .filter(cat => !!cat);
 }
 
-function onlyDate(val) {
-  return (val || '').slice(0, 10);
+async function fetchGoogleSheetData() {
+  const SHEET = 'Траты';
+  const url = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${SHEET}`;
+  const response = await fetch(url);
+  const text = await response.text();
+  const json = JSON.parse(text.substr(47).slice(0, -2));
+  // rows[0] - заголовки
+  return json.table.rows
+    .map(row => row.c.map(cell => cell ? (cell.v !== undefined ? cell.v : cell) : ''))
+    .filter(r => r.length >= 3); // дата, сумма, категория минимум
 }
 
 function groupByDay(transactions) {
@@ -62,25 +74,17 @@ function App() {
   const [day, setDay] = useState(getToday());
 
   useEffect(() => {
-    try {
-      WebApp.ready();
-    } catch (e) {}
+    try { WebApp.ready(); } catch (e) {}
   }, []);
 
-  // Подгружаем категории
   useEffect(() => {
     async function loadCats() {
-      try {
-        const cats = await fetchCategories();
-        setCategories(cats);
-      } catch (e) {
-        alert('Ошибка загрузки категорий Google Sheets');
-      }
+      const cats = await fetchCategories();
+      setCategories(cats);
     }
     loadCats();
   }, []);
 
-  // Загрузка данных из Google Sheets
   useEffect(() => {
     async function loadData() {
       setLoading(true);
@@ -88,15 +92,13 @@ function App() {
         const rows = await fetchGoogleSheetData();
         // [Дата, Сумма, Категория, Описание, ...]
         const txs = rows.slice(1).map(r => ({
-          date: onlyDate(r[0]),
+          date: parseCellDate(r[0]),
           amount: isNaN(Number(r[1])) ? 0 : Number(r[1]),
-          // Приводим к строке! даже если null или число — будет ''
-          category: typeof r[2] === 'string' ? r[2].trim() : (r[2] ? String(r[2]).trim() : ''),
+          category: (r[2] || '').toString().trim(),
           note: r[3] || '',
           telegramUserId: r[4] || '',
         })).filter(tx => !!tx.date && tx.amount > 0 && !!tx.category);
         setTransactions(txs);
-        // Устанавливаем день
         const dates = txs.map(t => t.date).filter(Boolean);
         setDay(dates.includes(getToday()) ? getToday() : (dates[dates.length - 1] || getToday()));
       } catch (e) {
@@ -107,21 +109,17 @@ function App() {
     loadData();
   }, []);
 
-  // Группировка по дням
   const daysMap = groupByDay(transactions);
   const days = Object.keys(daysMap).sort().reverse();
   const dailyTx = daysMap[day] || [];
 
-  // Данные для диаграммы (labels и data совпадают по категориям)
   const chartData = {
     labels: categories,
     datasets: [
       {
         data: categories.map(cat =>
           dailyTx
-            .filter(tx =>
-              (typeof tx.category === 'string' ? tx.category.trim().toLowerCase() : '') === cat.trim().toLowerCase()
-            )
+            .filter(tx => tx.category.trim().toLowerCase() === cat.trim().toLowerCase())
             .reduce((sum, tx) => sum + tx.amount, 0)
         ),
         backgroundColor: [
