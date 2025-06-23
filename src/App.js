@@ -18,24 +18,32 @@ function getToday() {
   return new Date().toISOString().split('T')[0];
 }
 
-const categories = ['Еда', 'Транспорт', 'Квартира', 'Здоровье', 'Одежда', 'Другое'];
+const SPREADSHEET_ID = '1lZbSlYvCyHmR45Ducd2R5w_gwOaKnJePOW4RKaiGx2E';
 
-// --- Функция загрузки данных из Google Sheets ---
 async function fetchGoogleSheetData() {
-  const SPREADSHEET_ID = '1lZbSlYvCyHmR45Ducd2R5w_gwOaKnJePOW4RKaiGx2E';
   const SHEET = 'Траты';
   const url = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${SHEET}`;
   const response = await fetch(url);
   const text = await response.text();
   const json = JSON.parse(text.substr(47).slice(0, -2));
-  // rows[0] - заголовки
   return json.table.rows
     .map(row => row.c.map(cell => (cell ? cell.v : '')))
-    .filter(r => r.length >= 5); // дата, сумма, категория, описание, id
+    .filter(r => r.length >= 3); // дата, сумма, категория минимум
+}
+
+async function fetchCategories() {
+  const SHEET = 'Категории';
+  const url = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${SHEET}`;
+  const response = await fetch(url);
+  const text = await response.text();
+  const json = JSON.parse(text.substr(47).slice(0, -2));
+  // Все значения из первой колонки (C) со 2-й строки, где не пусто
+  return json.table.rows.slice(1)
+    .map(row => (row.c[0] ? row.c[0].v : '').trim())
+    .filter(cat => !!cat);
 }
 
 function onlyDate(val) {
-  // Берём только "2025-06-21"
   return (val || '').slice(0, 10);
 }
 
@@ -48,6 +56,7 @@ function groupByDay(transactions) {
 }
 
 function App() {
+  const [categories, setCategories] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
   const [day, setDay] = useState(getToday());
@@ -58,22 +67,31 @@ function App() {
     } catch (e) {}
   }, []);
 
-  // Загружаем данные из Google Sheets
+  // Подгружаем категории
+  useEffect(() => {
+    async function loadCats() {
+      const cats = await fetchCategories();
+      setCategories(cats);
+    }
+    loadCats();
+  }, []);
+
+  // Загрузка данных из Google Sheets
   useEffect(() => {
     async function loadData() {
       setLoading(true);
       try {
         const rows = await fetchGoogleSheetData();
-        // [Дата, Сумма, Категория, Описание, Telegram User ID]
+        // [Дата, Сумма, Категория, Описание, ...]
         const txs = rows.slice(1).map(r => ({
           date: onlyDate(r[0]),
-          amount: r[1],
-          category: r[2],
-          note: r[3],
-          telegramUserId: r[4],
-        }));
+          amount: isNaN(Number(r[1])) ? 0 : Number(r[1]),
+          category: (r[2] || '').trim(),
+          note: r[3] || '',
+          telegramUserId: r[4] || '',
+        })).filter(tx => !!tx.date && tx.amount > 0);
         setTransactions(txs);
-        // выставить день на сегодня, если есть такие транзакции, иначе на последний найденный
+        // Устанавливаем день
         const dates = txs.map(t => t.date).filter(Boolean);
         setDay(dates.includes(getToday()) ? getToday() : (dates[dates.length - 1] || getToday()));
       } catch (e) {
@@ -89,17 +107,18 @@ function App() {
   const days = Object.keys(daysMap).sort().reverse();
   const dailyTx = daysMap[day] || [];
 
-  // Готовим данные для диаграммы
+  // Данные для диаграммы (labels и data совпадают по категориям)
   const chartData = {
     labels: categories,
     datasets: [
       {
         data: categories.map(cat =>
-          dailyTx.filter(tx => tx.category.toLowerCase() === cat.toLowerCase()).reduce((sum, tx) => sum + +tx.amount, 0)
+          dailyTx.filter(tx => tx.category.toLowerCase() === cat.toLowerCase()).reduce((sum, tx) => sum + tx.amount, 0)
         ),
         backgroundColor: [
-          '#4682B4', '#FFA07A', '#7FFFD4', '#F4A460', '#8A2BE2', '#C0C0C0'
-        ],
+          '#4682B4', '#FFA07A', '#7FFFD4', '#F4A460', '#8A2BE2', '#C0C0C0', '#FFD700', '#90EE90', '#FF6347',
+          '#A52A2A', '#DC143C', '#20B2AA', '#FF8C00', '#808000', '#008B8B', '#B8860B', '#9932CC', '#708090'
+        ].slice(0, categories.length),
       },
     ],
   };
@@ -107,7 +126,6 @@ function App() {
   return (
     <div className="App">
       <h2>Финансы в Telegram</h2>
-
       <div className="days-scroll">
         {days.map(d => (
           <button
@@ -121,16 +139,24 @@ function App() {
       </div>
 
       <h4>Диаграмма за {day}</h4>
-      {loading ? <div>Загрузка...</div> : <Pie data={chartData} />}
+      {loading || categories.length === 0
+        ? <div>Загрузка...</div>
+        : (chartData.datasets[0].data.some(x => x > 0)
+            ? <Pie data={chartData} />
+            : <div>Нет данных для диаграммы</div>
+          )
+      }
 
       <h4>Траты за {day}</h4>
       <ul className="tx-list">
-        {dailyTx.map((tx, i) => (
-          <li key={i}>
-            <b>{tx.amount}₽</b> — {tx.category} <i>{tx.note}</i>
-          </li>
-        ))}
-        {dailyTx.length === 0 && <li>Нет трат</li>}
+        {dailyTx.length > 0
+          ? dailyTx.map((tx, i) => (
+              <li key={i}>
+                <b>{tx.amount}₽</b> — {tx.category} <i>{tx.note}</i>
+              </li>
+            ))
+          : <li>Нет трат</li>
+        }
       </ul>
     </div>
   );
