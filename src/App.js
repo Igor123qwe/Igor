@@ -37,9 +37,9 @@ async function fetchCategories() {
   const response = await fetch(url);
   const text = await response.text();
   const json = JSON.parse(text.substr(47).slice(0, -2));
-  // Все значения из первой колонки (C) со 2-й строки, где не пусто
+  // Берём только значения из первой колонки, начиная со 2 строки
   return json.table.rows.slice(1)
-    .map(row => (row.c[0] ? row.c[0].v : '').trim())
+    .map(row => (row.c[0] && typeof row.c[0].v === 'string' ? row.c[0].v.trim() : ''))
     .filter(cat => !!cat);
 }
 
@@ -70,8 +70,12 @@ function App() {
   // Подгружаем категории
   useEffect(() => {
     async function loadCats() {
-      const cats = await fetchCategories();
-      setCategories(cats);
+      try {
+        const cats = await fetchCategories();
+        setCategories(cats);
+      } catch (e) {
+        alert('Ошибка загрузки категорий Google Sheets');
+      }
     }
     loadCats();
   }, []);
@@ -86,10 +90,11 @@ function App() {
         const txs = rows.slice(1).map(r => ({
           date: onlyDate(r[0]),
           amount: isNaN(Number(r[1])) ? 0 : Number(r[1]),
-          category: (r[2] || '').trim(),
+          // Приводим к строке! даже если null или число — будет ''
+          category: typeof r[2] === 'string' ? r[2].trim() : (r[2] ? String(r[2]).trim() : ''),
           note: r[3] || '',
           telegramUserId: r[4] || '',
-        })).filter(tx => !!tx.date && tx.amount > 0);
+        })).filter(tx => !!tx.date && tx.amount > 0 && !!tx.category);
         setTransactions(txs);
         // Устанавливаем день
         const dates = txs.map(t => t.date).filter(Boolean);
@@ -113,7 +118,11 @@ function App() {
     datasets: [
       {
         data: categories.map(cat =>
-          dailyTx.filter(tx => tx.category.toLowerCase() === cat.toLowerCase()).reduce((sum, tx) => sum + tx.amount, 0)
+          dailyTx
+            .filter(tx =>
+              (typeof tx.category === 'string' ? tx.category.trim().toLowerCase() : '') === cat.trim().toLowerCase()
+            )
+            .reduce((sum, tx) => sum + tx.amount, 0)
         ),
         backgroundColor: [
           '#4682B4', '#FFA07A', '#7FFFD4', '#F4A460', '#8A2BE2', '#C0C0C0', '#FFD700', '#90EE90', '#FF6347',
