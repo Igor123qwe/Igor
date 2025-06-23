@@ -20,6 +20,30 @@ function getToday() {
 
 const SPREADSHEET_ID = '1lZbSlYvCyHmR45Ducd2R5w_gwOaKnJePOW4RKaiGx2E';
 
+// Получаем категории из листа "Категории"
+async function fetchCategories() {
+  const SHEET = 'Категории';
+  const url = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${SHEET}`;
+  const response = await fetch(url);
+  const text = await response.text();
+  const json = JSON.parse(text.substr(47).slice(0, -2));
+  return json.table.rows.slice(1)
+    .map(row => (row.c[0] && typeof row.c[0].v === 'string' ? row.c[0].v.trim() : ''))
+    .filter(cat => !!cat);
+}
+
+// Получаем траты из листа "Траты"
+async function fetchGoogleSheetData() {
+  const SHEET = 'Траты';
+  const url = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${SHEET}`;
+  const response = await fetch(url);
+  const text = await response.text();
+  const json = JSON.parse(text.substr(47).slice(0, -2));
+  return json.table.rows
+    .map(row => row.c.map(cell => cell ? (cell.v !== undefined ? cell.v : cell) : ''))
+    .filter(r => r.length >= 3);
+}
+
 function parseCellDate(cell) {
   if (!cell) return '';
   if (typeof cell === 'string') return cell.slice(0, 10);
@@ -33,28 +57,6 @@ function parseCellDate(cell) {
   return '';
 }
 
-async function fetchCategories() {
-  const SHEET = 'Категории';
-  const url = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${SHEET}`;
-  const response = await fetch(url);
-  const text = await response.text();
-  const json = JSON.parse(text.substr(47).slice(0, -2));
-  return json.table.rows.slice(1)
-    .map(row => (row.c[0] && typeof row.c[0].v === 'string' ? row.c[0].v.trim() : ''))
-    .filter(cat => !!cat);
-}
-
-async function fetchGoogleSheetData() {
-  const SHEET = 'Траты';
-  const url = `https://docs.google.com/spreadsheets/d/${SPREADSHEET_ID}/gviz/tq?tqx=out:json&sheet=${SHEET}`;
-  const response = await fetch(url);
-  const text = await response.text();
-  const json = JSON.parse(text.substr(47).slice(0, -2));
-  return json.table.rows
-    .map(row => row.c.map(cell => cell ? (cell.v !== undefined ? cell.v : cell) : ''))
-    .filter(r => r.length >= 3);
-}
-
 function groupByDay(transactions) {
   const map = {};
   transactions.forEach(tx => {
@@ -63,7 +65,7 @@ function groupByDay(transactions) {
   return map;
 }
 
-// Палитра цветов (можно добавить или поменять)
+// Цвета для диаграммы (дополняй по желанию)
 const PALETTE = [
   '#4682B4', '#FFA07A', '#7FFFD4', '#F4A460', '#8A2BE2', '#C0C0C0', '#FFD700', '#90EE90', '#FF6347',
   '#A52A2A', '#DC143C', '#20B2AA', '#FF8C00', '#808000', '#008B8B', '#B8860B', '#9932CC', '#708090'
@@ -75,8 +77,10 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [day, setDay] = useState(getToday());
 
+  // Запуск Telegram WebApp
   useEffect(() => { try { WebApp.ready(); } catch (e) {} }, []);
 
+  // Загрузка категорий (один раз)
   useEffect(() => {
     async function loadCats() {
       const cats = await fetchCategories();
@@ -85,35 +89,32 @@ function App() {
     loadCats();
   }, []);
 
+  // Загрузка и обновление транзакций
   useEffect(() => {
     async function loadData() {
       setLoading(true);
       try {
         const rows = await fetchGoogleSheetData();
+        // Индексы: 0 — дата, 1 — сумма, 2 — категория, 3 — user_id
         const txs = rows.slice(1).map(r => ({
           date: parseCellDate(r[0]),
           amount: isNaN(Number(r[1])) ? 0 : Number(r[1]),
           category: (r[2] || '').toString().trim(),
-          note: r[3] || '',
-          telegramUserId: r[4] || '',
+          telegramUserId: r[3] || '',
         })).filter(tx => !!tx.date && tx.amount > 0 && !!tx.category);
         setTransactions(txs);
 
-        // Поддержка "живого" нового дня (если наступил — сразу виден)
+        // Автоматически показываем сегодня, если есть траты сегодня — иначе последний день с тратами
         const dates = txs.map(t => t.date).filter(Boolean);
         const today = getToday();
-        if (!dates.includes(today)) {
-          setDay(today);
-        } else {
-          setDay(dates[dates.length - 1] || today);
-        }
+        setDay(dates.includes(today) ? today : (dates[dates.length - 1] || today));
       } catch (e) {
         alert('Ошибка загрузки данных Google Sheets');
       }
       setLoading(false);
     }
     loadData();
-    // Автообновление данных раз в 1 минуту (можно убрать/поменять)
+    // Автообновление раз в 1 минуту (по желанию)
     const interval = setInterval(loadData, 60000);
     return () => clearInterval(interval);
   }, []);
@@ -122,7 +123,7 @@ function App() {
   const days = Object.keys(daysMap).sort().reverse();
   const dailyTx = daysMap[day] || [];
 
-  // Только категории с ненулевой суммой
+  // Только ненулевые категории для диаграммы
   const activeCategories = categories.filter(cat =>
     dailyTx.some(tx => tx.category.trim().toLowerCase() === cat.trim().toLowerCase())
   );
@@ -170,7 +171,7 @@ function App() {
         {dailyTx.length > 0
           ? dailyTx.map((tx, i) => (
               <li key={i}>
-                <b>{tx.amount}₽</b> — {tx.category} <i>{tx.note}</i>
+                <b>{tx.amount}₽</b> — {tx.category}
               </li>
             ))
           : <li>Нет трат</li>
